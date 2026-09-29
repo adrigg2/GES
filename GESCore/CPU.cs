@@ -1,4 +1,6 @@
-﻿namespace GESCore;
+﻿using System.ComponentModel;
+
+namespace GESCore;
 
 public class CPU
 {
@@ -8,6 +10,33 @@ public class CPU
         FetchAddressLow,
         FetchAddressHigh,
         ReadFromAddress,
+    }
+
+    [Flags]
+    private enum CPUFlags
+    {
+        Carry            = 0b0000_0001,
+        Zero             = 0b0000_0010,
+        InterruptDisable = 0b0000_0100,
+        Decimal          = 0b0000_1000,
+        B                = 0b0001_0000,
+        Overflow         = 0b0100_0000,
+        Negative         = 0b1000_0000
+    }
+
+    private enum OpcodeType : byte
+    {
+        Control = 0b0000_0000,
+        ALU     = 0b0000_0001,
+        RMW     = 0b0000_0010,
+    }
+
+    private enum OpcodeAddressMode : byte
+    {
+        ZPG  = 0b0000_0100,
+        Abs  = 0b0000_1100,
+        ZPGX = 0b0001_0100,
+        AbsX = 0b0001_1100,
     }
 
     private State _state = State.FetchOpcode;
@@ -24,6 +53,11 @@ public class CPU
 
     private readonly MMU _mmu = new();
 
+    public CPU()
+    {
+        _p = 0x20;
+    }
+
     public void Tick()
     {
         switch (_state)
@@ -33,7 +67,7 @@ public class CPU
                     _opcode = _mmu.ReadByte(_pc++);
                     int b = _opcode & 0x1C;
                     int c = _opcode & 0x03;
-                    if (b == 0x08 || b == 0x10 || (b == 0x00 && (c == 0x00 || c == 0x02)) || (b == 0x18 && (c == 0x00 || c == 0x02))) // instruction uses a single operand or it is implied
+                    if (b == 0x08 || b == 0x10 || ((b == 0x00 || b == 0x18) && (c == (byte)OpcodeType.Control || c == (byte)OpcodeType.RMW))) // instruction uses a single operand or it is implied
                     {
                         _state = State.ReadFromAddress;
                         break;
@@ -45,7 +79,7 @@ public class CPU
                 {
                     _addressLow = _mmu.ReadByte(_pc++);
                     int b = _opcode & 0x1C;
-                    if (b == 0x0C || b == 0x1C)
+                    if (b == (byte)OpcodeAddressMode.Abs || b == (byte)OpcodeAddressMode.AbsX)
                     {
                         _state = State.FetchAddressHigh;
                         break;
@@ -59,13 +93,12 @@ public class CPU
                     int a = _opcode & 0xE0;
                     int b = _opcode & 0x1C;
                     int c = _opcode & 0x03;
-                    if (b == 0x1C)
+                    if (b == (byte)OpcodeAddressMode.AbsX)
                     {
-                        if (c == 0x02 && (a == 0x80 || a == 0xA0))
+                        if (c == (byte)OpcodeType.RMW && (a == 0x80 || a == 0xA0))
                         {
                             _addressCarry = ((_addressLow + _y) >> 8) != 0;
                             _addressLow += _y;
-
                         }
                         else
                         {
@@ -85,9 +118,9 @@ public class CPU
 
                     _operand = _mmu.ReadByte((ushort)((_addressHigh << 8) | _addressLow));
 
-                    if (b == 0x14)
+                    if (b == (byte)OpcodeAddressMode.ZPGX)
                     {
-                        if (c == 0x02 && (a == 0x80 || a == 0xA0))
+                        if (c == (byte)OpcodeType.RMW && (a == 0x80 || a == 0xA0))
                         {
                             _addressLow += _y;
                         }
@@ -101,12 +134,146 @@ public class CPU
                         _addressCarry = false;
                         _addressHigh++;
                     }
-                    else
+
+                    switch (c)
                     {
-                        _state = State.FetchOpcode;
+                        case (byte)OpcodeType.Control:
+                            break;
+                        case (byte)OpcodeType.ALU:
+                            ALUInstruction(a);
+                            break;
+                        case (byte)OpcodeType.RMW:
+                            break;
                     }
                     break;
                 }
+        }
+    }
+
+    private void ALUInstruction(int a)
+    {
+        switch(a >> 5)
+        {
+            case 0x00:
+                ORA();
+                break;
+            case 0x01:
+                AND();
+                break;
+            case 0x02:
+                EOR();
+                break;
+            case 0x03:
+                ADC();
+                break;
+            case 0x04:
+                _mmu.WriteByte((ushort)((_addressHigh << 8) | _addressLow), _a);
+                break;
+            case 0x05:
+                _a = _operand;
+                SetZeroFlag(_a);
+                SetNegativeFlag(_a);
+                break;
+            case 0x06:
+                CMP();
+                break;
+            case 0x07:
+                SBC();
+                break;
+        }
+    }
+
+    private void ORA()
+    {
+        _a |= _operand;
+        SetZeroFlag(_a);
+        SetNegativeFlag(_a);
+    }
+
+    private void AND()
+    {
+        _a &= _operand;
+        SetZeroFlag(_a);
+        SetNegativeFlag(_a);
+    }
+
+    private void EOR()
+    {
+        _a ^= _operand;
+        SetZeroFlag(_a);
+        SetNegativeFlag(_a);
+    }
+
+    private void ADC()
+    {
+        int carryValue = ((CPUFlags)_p).HasFlag(CPUFlags.Carry) ? 1 : 0;
+        int result = _a + _operand + carryValue;
+        SetOverflowFlag(result);
+        _a = (byte)result;
+        SetCarryFlag(result);
+        SetZeroFlag(_a);
+        SetNegativeFlag(_a);
+    }
+
+    private void CMP()
+    {
+        int result = _a - _operand;
+        SetCarryFlag(result);
+        SetZeroFlag(result);
+        SetNegativeFlag(result);
+    }
+
+    private void SBC()
+    {
+        _operand = (byte)~_operand;
+        ADC();
+    }
+
+    private void SetCarryFlag(int value)
+    {
+        if (value > 0xFF)
+        {
+            _p |= (byte)CPUFlags.Carry;
+        }
+        else
+        {
+            _p = (byte)(_p & ~(byte)CPUFlags.Carry);
+        }
+    }
+
+    private void SetZeroFlag(int value)
+    {
+        if (value == 0)
+        {
+            _p |= (byte)CPUFlags.Zero;
+        }
+        else
+        {
+            _p = (byte)(_p & ~(byte)CPUFlags.Zero);
+        }
+    }
+
+    private void SetOverflowFlag(int value)
+    {
+        if (((value ^ _a) & (value ^ _operand) & 0x80) != 0)
+        {
+            _p |= (byte)CPUFlags.Overflow;
+        }
+        else
+        {
+            _p = (byte)(_p & ~(byte)CPUFlags.Overflow);
+        }
+    }
+
+    private void SetNegativeFlag(int value)
+    {
+        if ((value & 0x80) != 0)
+        {
+            _p |= (byte)CPUFlags.Negative;
+        }
+        else
+        {
+            _p = (byte)(_p & ~(byte)CPUFlags.Negative);
         }
     }
 }
