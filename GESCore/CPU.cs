@@ -9,6 +9,7 @@ public class CPU
         FetchOpcode,
         FetchAddressLow,
         FetchAddressHigh,
+        FetchOperand,
         ReadFromAddress,
     }
 
@@ -33,10 +34,14 @@ public class CPU
 
     private enum OpcodeAddressMode : byte
     {
-        ZPG  = 0b0000_0100,
-        Abs  = 0b0000_1100,
-        ZPGX = 0b0001_0100,
-        AbsX = 0b0001_1100,
+        ImplImmInd  = 0b0000_0000,
+        ZPG         = 0b0000_0100,
+        ImmImpl     = 0b0000_1000,
+        Abs         = 0b0000_1100,
+        RelInd      = 0b0001_0000,
+        ZPGX        = 0b0001_0100,
+        ImplAbsY    = 0b0001_1000,
+        AbsX        = 0b0001_1100,
     }
 
     private State _state = State.FetchOpcode;
@@ -60,97 +65,99 @@ public class CPU
 
     public void Tick()
     {
+        int a = _opcode & 0xE0;
+        int b = _opcode & 0x1C;
+        int c = _opcode & 0x03;
+
         switch (_state)
         {
             case State.FetchOpcode:
+                _opcode = _mmu.ReadByte(_pc++);
+                a = _opcode & 0xE0;
+                b = _opcode & 0x1C;
+                c = _opcode & 0x03;
+                if (b == (byte)OpcodeAddressMode.ImmImpl && c == (byte)OpcodeType.ALU || (b == (byte)OpcodeAddressMode.ImplImmInd && (c == (byte)OpcodeType.Control || c == (byte)OpcodeType.RMW) && a > 0x80)) // instruction uses a single operand
                 {
-                    _opcode = _mmu.ReadByte(_pc++);
-                    int b = _opcode & 0x1C;
-                    int c = _opcode & 0x03;
-                    if (b == 0x08 || b == 0x10 || ((b == 0x00 || b == 0x18) && (c == (byte)OpcodeType.Control || c == (byte)OpcodeType.RMW))) // instruction uses a single operand or it is implied
-                    {
-                        _state = State.ReadFromAddress;
-                        break;
-                    }
-                    _state = State.FetchAddressLow;
+                    _state = State.FetchOperand;
                     break;
                 }
+                _state = State.FetchAddressLow;
+                break;
             case State.FetchAddressLow:
+                _addressLow = _mmu.ReadByte(_pc++);
+                if (b == (byte)OpcodeAddressMode.Abs || b == (byte)OpcodeAddressMode.AbsX)
                 {
-                    _addressLow = _mmu.ReadByte(_pc++);
-                    int b = _opcode & 0x1C;
-                    if (b == (byte)OpcodeAddressMode.Abs || b == (byte)OpcodeAddressMode.AbsX)
-                    {
-                        _state = State.FetchAddressHigh;
-                        break;
-                    }
-                    _state = State.ReadFromAddress;
+                    _state = State.FetchAddressHigh;
                     break;
                 }
+                _state = State.ReadFromAddress;
+                break;
             case State.FetchAddressHigh:
+                _addressHigh = _mmu.ReadByte(_pc++);
+                if (b == (byte)OpcodeAddressMode.AbsX)
                 {
-                    _addressHigh = _mmu.ReadByte(_pc++);
-                    int a = _opcode & 0xE0;
-                    int b = _opcode & 0x1C;
-                    int c = _opcode & 0x03;
-                    if (b == (byte)OpcodeAddressMode.AbsX)
+                    if (c == (byte)OpcodeType.RMW && (a == 0x80 || a == 0xA0))
                     {
-                        if (c == (byte)OpcodeType.RMW && (a == 0x80 || a == 0xA0))
-                        {
-                            _addressCarry = ((_addressLow + _y) >> 8) != 0;
-                            _addressLow += _y;
-                        }
-                        else
-                        {
-                            _addressCarry = ((_addressLow + _y) >> 8) != 0;
-                            _addressLow += _x;
-                        }
+                        _addressCarry = ((_addressLow + _y) >> 8) != 0;
+                        _addressLow += _y;
                     }
-
-                    _state = State.ReadFromAddress;
-                    break;
+                    else
+                    {
+                        _addressCarry = ((_addressLow + _y) >> 8) != 0;
+                        _addressLow += _x;
+                    }
                 }
+
+                _state = State.ReadFromAddress;
+                break;
+            case State.FetchOperand:
+                _operand = _mmu.ReadByte(_pc++);
+                switch (c)
+                {
+                    case (byte)OpcodeType.Control:
+                        break;
+                    case (byte)OpcodeType.ALU:
+                        ALUInstruction(a, true);
+                        break;
+                    case (byte)OpcodeType.RMW:
+                        break;
+                }
+                break;
             case State.ReadFromAddress:
+                _operand = _mmu.ReadByte((ushort)((_addressHigh << 8) | _addressLow));
+
+                if (b == (byte)OpcodeAddressMode.ZPGX)
                 {
-                    int a = _opcode & 0xE0;
-                    int b = _opcode & 0x1C;
-                    int c = _opcode & 0x03;
-
-                    _operand = _mmu.ReadByte((ushort)((_addressHigh << 8) | _addressLow));
-
-                    if (b == (byte)OpcodeAddressMode.ZPGX)
+                    if (c == (byte)OpcodeType.RMW && (a == 0x80 || a == 0xA0))
                     {
-                        if (c == (byte)OpcodeType.RMW && (a == 0x80 || a == 0xA0))
-                        {
-                            _addressLow += _y;
-                        }
-                        else
-                        {
-                            _addressLow += _x;
-                        }
+                        _addressLow += _y;
                     }
-                    else if (_addressCarry)
+                    else
                     {
-                        _addressCarry = false;
-                        _addressHigh++;
+                        _addressLow += _x;
                     }
-
-                    switch (c)
-                    {
-                        case (byte)OpcodeType.Control:
-                            break;
-                        case (byte)OpcodeType.ALU:
-                            ALUInstruction(a);
-                            break;
-                        case (byte)OpcodeType.RMW:
-                            break;
-                    }
-                    break;
                 }
+                else if (_addressCarry)
+                {
+                    _addressCarry = false;
+                    _addressHigh++;
+                }
+
+                switch (c)
+                {
+                    case (byte)OpcodeType.Control:
+                        break;
+                    case (byte)OpcodeType.ALU:
+                        ALUInstruction(a);
+                        break;
+                    case (byte)OpcodeType.RMW:
+                        break;
+                }
+                break;
         }
     }
 
-    private void ALUInstruction(int a)
+    private void ALUInstruction(int a, bool immediateAddressing = false)
     {
         switch(a >> 5)
         {
@@ -167,7 +174,10 @@ public class CPU
                 ADC();
                 break;
             case 0x04:
-                _mmu.WriteByte((ushort)((_addressHigh << 8) | _addressLow), _a);
+                if (!immediateAddressing)
+                {
+                    _mmu.WriteByte((ushort)((_addressHigh << 8) | _addressLow), _a);
+                }
                 break;
             case 0x05:
                 _a = _operand;
