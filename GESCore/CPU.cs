@@ -10,7 +10,11 @@ public class CPU
         FetchAddressLow,
         FetchAddressHigh,
         FetchOperand,
+        ReadFromPointer,
+        FetchAddressLowFromPointer,
+        FetchAddressHighFromPointer,
         ReadFromAddress,
+        ExecuteImplied,
     }
 
     [Flags]
@@ -76,9 +80,14 @@ public class CPU
                 a = _opcode & 0xE0;
                 b = _opcode & 0x1C;
                 c = _opcode & 0x03;
-                if (b == (byte)OpcodeAddressMode.ImmImpl && c == (byte)OpcodeType.ALU || (b == (byte)OpcodeAddressMode.ImplImmInd && (c == (byte)OpcodeType.Control || c == (byte)OpcodeType.RMW) && a > 0x80)) // instruction uses a single operand
+                if (b == (byte)OpcodeAddressMode.ImmImpl && c == (byte)OpcodeType.ALU || (b == (byte)OpcodeAddressMode.ImplImmInd && (c == (byte)OpcodeType.Control || c == (byte)OpcodeType.RMW) && a >= 0x80) || (c == (byte)OpcodeType.Control && b == (byte)OpcodeAddressMode.RelInd)) // instruction uses a single operand
                 {
                     _state = State.FetchOperand;
+                    break;
+                }
+                else if ((c == (byte)OpcodeType.Control || c == (byte)OpcodeType.RMW) && (b == (byte)OpcodeAddressMode.ImmImpl || b == (byte)OpcodeAddressMode.ImplAbsY || (b == (byte)OpcodeAddressMode.ImplImmInd && a < 0x80)))
+                {
+                    _state = State.ExecuteImplied;
                     break;
                 }
                 _state = State.FetchAddressLow;
@@ -88,6 +97,11 @@ public class CPU
                 if (b == (byte)OpcodeAddressMode.Abs || b == (byte)OpcodeAddressMode.AbsX)
                 {
                     _state = State.FetchAddressHigh;
+                    break;
+                }
+                else if (b == (byte)OpcodeAddressMode.ImplImmInd)
+                {
+                    _state = State.ReadFromPointer;
                     break;
                 }
                 _state = State.ReadFromAddress;
@@ -123,6 +137,19 @@ public class CPU
                         break;
                 }
                 break;
+            case State.ReadFromPointer:
+                _addressLow = (byte)(_addressLow + _x);
+                _state = State.FetchAddressLowFromPointer;
+                break;
+            case State.FetchAddressLowFromPointer:
+                _operand = _mmu.ReadByte(_addressLow);
+                _state = State.FetchAddressHighFromPointer;
+                break;
+            case State.FetchAddressHighFromPointer:
+                _addressHigh = _mmu.ReadByte((byte)(_addressLow + 1));
+                _addressLow = _operand;
+                _state = State.ReadFromAddress;
+                break;
             case State.ReadFromAddress:
                 _operand = _mmu.ReadByte((ushort)((_addressHigh << 8) | _addressLow));
 
@@ -153,6 +180,8 @@ public class CPU
                     case (byte)OpcodeType.RMW:
                         break;
                 }
+                break;
+            case State.ExecuteImplied:
                 break;
         }
     }
