@@ -96,7 +96,7 @@ public class CPU
                 break;
             case State.FetchAddressLow:
                 _addressLow = _mmu.ReadByte(_pc++);
-                if (b == (byte)OpcodeAddressMode.Abs || b == (byte)OpcodeAddressMode.AbsX)
+                if (b == (byte)OpcodeAddressMode.Abs || b == (byte)OpcodeAddressMode.AbsX || (b == (byte)OpcodeAddressMode.ImplAbsY && c == (byte)OpcodeType.ALU))
                 {
                     _state = State.FetchAddressHigh;
                     break;
@@ -117,7 +117,7 @@ public class CPU
                 _addressHigh = _mmu.ReadByte(_pc++);
                 if (b == (byte)OpcodeAddressMode.AbsX)
                 {
-                    if (c == (byte)OpcodeType.RMW && (a == 0x80 || a == 0xA0))
+                    if ((c == (byte)OpcodeType.RMW && (a == 0x80 || a == 0xA0)) || b == (byte)OpcodeAddressMode.ImplAbsY)
                     {
                         _addressCarry = ((_addressLow + _y) >> 8) != 0;
                         _addressLow += _y;
