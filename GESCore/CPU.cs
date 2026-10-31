@@ -289,6 +289,59 @@ public class CPU
         ADC();
     }
 
+    private void ASL()
+    {
+        int result = _operand << 1;
+        SetCarryFlag(result);
+        SetZeroFlag(result);
+        SetNegativeFlag(result);
+        _operand = (byte)result;
+    }
+
+    private void ROL()
+    {
+        int result = (_operand << 1) | ((_p & (byte)CPUFlags.Carry) != 0 ? 1 : 0);
+        SetCarryFlag(result);
+        SetZeroFlag(result);
+        SetNegativeFlag(result);
+        _operand = (byte)result;
+    }
+
+    private void LSR()
+    {
+        int carry = _operand & 0x01;
+        if (carry != 0)
+        {
+            _p |= (byte)CPUFlags.Carry;
+        }
+        else
+        {
+            _p = (byte)(_p & ~(byte)CPUFlags.Carry);
+        }
+
+        _operand = (byte)(_operand >> 1);
+        SetZeroFlag(_operand);
+        SetNegativeFlag(_operand);
+    }
+
+    private void ROR()
+    {
+        int result = (_operand >> 1) | ((_p & (byte)CPUFlags.Carry) != 0 ? 0x80 : 0);
+        int carry = _operand & 0x01;
+        if (carry != 0)
+        {
+            _p |= (byte)CPUFlags.Carry;
+        }
+        else
+        {
+            _p = (byte)(_p & ~(byte)CPUFlags.Carry);
+        }
+
+        SetZeroFlag(result);
+        SetNegativeFlag(result);
+        _operand = (byte)result;
+    }
+
     private void SetCarryFlag(int value)
     {
         if (value > 0xFF)
@@ -303,7 +356,7 @@ public class CPU
 
     private void SetZeroFlag(int value)
     {
-        if (value == 0)
+        if ((value & 0xFF) == 0)
         {
             _p |= (byte)CPUFlags.Zero;
         }
