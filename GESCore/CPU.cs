@@ -141,6 +141,7 @@ public class CPU
                         ALUInstruction(a, true);
                         break;
                     case (byte)OpcodeType.RMW:
+                        RMWInstruction(a, immediateAddressing: true);
                         break;
                 }
                 break;
@@ -198,11 +199,19 @@ public class CPU
                         ALUInstruction(a);
                         break;
                     case (byte)OpcodeType.RMW:
+                        RMWInstruction(a);
                         break;
                 }
-                _state = State.FetchOpcode;
                 break;
             case State.ExecuteImplied:
+                switch (c)
+                {
+                    case (byte)OpcodeType.Control:
+                        break;
+                    case (byte)OpcodeType.RMW:
+                        RMWInstruction(a, impliedAddressing: true);
+                        break;
+                }
                 break;
         }
     }
@@ -241,6 +250,76 @@ public class CPU
                 SBC();
                 break;
         }
+
+        _state = State.FetchOpcode;
+    }
+
+    private void RMWInstruction(int a, int b = 0, bool impliedAddressing = false, bool immediateAddressing = false)
+    {
+        switch(a >> 5)
+        {
+            case 0x00:
+                ASL();
+                break;
+            case 0x01:
+                ROL();
+                break;
+            case 0x02:
+                LSR();
+                break;
+            case 0x03:
+                ROR();
+                break;
+            case 0x04:
+                if (impliedAddressing)
+                {
+                    if ((b >> 2) == 2)
+                    {
+                        _a = _x;
+                        SetZeroFlag(_a);
+                        SetNegativeFlag(_a);
+                    }
+                    else if ((b >> 2) == 6)
+                    {
+                        _sp = _x;
+                    }
+                }
+                else if (!immediateAddressing)
+                {
+                    _mmu.WriteByte((ushort)((_addressHigh << 8) | _addressLow), _x);
+                }
+                _state = State.FetchOperand;
+                return;
+            case 0x05:
+                if (impliedAddressing)
+                {
+                    if ((b >> 2) == 2)
+                    {
+                        _x = _a;
+                        SetZeroFlag(_x);
+                        SetNegativeFlag(_x);
+                    }
+                    else if ((b >> 2) == 6)
+                    {
+                        _x = _sp;
+                        SetZeroFlag(_x);
+                        SetNegativeFlag(_x);
+                    }
+                }
+                else
+                {
+                    _x = _operand;
+                    SetZeroFlag(_x);
+                    SetNegativeFlag(_x);
+                }
+                _state = State.FetchOperand;
+                return;
+            case 0x06:
+                break;
+            case 0x07:
+                break;
+        }
+        // write state
     }
 
     private void ORA()
