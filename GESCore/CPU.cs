@@ -15,6 +15,7 @@ public class CPU
         FetchAddressHighFromIndexedPointer,
         FetchIndexedAddressLowFromPointer,
         FetchIndexedAddressHighFromPointer,
+        FixAddressHigh,
         ReadFromAddress,
         ExecuteImplied,
     }
@@ -53,6 +54,7 @@ public class CPU
     private State _state = State.FetchOpcode;
 
     private bool _addressCarry;
+    private bool _writeInstruction;
 
     private byte _a, _x, _y, _p, _sp, _operand;
 
@@ -82,6 +84,11 @@ public class CPU
                 a = _opcode & 0xE0;
                 b = _opcode & 0x1C;
                 c = _opcode & 0x03;
+
+                _writeInstruction = 
+                    (c == (byte)OpcodeType.RMW && a != 0xA0 && b != (byte)OpcodeAddressMode.ImmImpl && b != (byte)OpcodeAddressMode.ImplAbsY) 
+                    || (c ==(byte)OpcodeType.ALU && a == 0x80) || (c == (byte)OpcodeType.Control && a == 0x80);
+
                 if ((b == (byte)OpcodeAddressMode.ImmImpl && c == (byte)OpcodeType.ALU) || (b == (byte)OpcodeAddressMode.ImplImmInd && (c == (byte)OpcodeType.Control || c == (byte)OpcodeType.RMW) && a >= 0x80) || (c == (byte)OpcodeType.Control && b == (byte)OpcodeAddressMode.RelInd)) // instruction uses a single operand
                 {
                     _state = State.FetchOperand;
@@ -129,7 +136,14 @@ public class CPU
                     }
                 }
 
-                _state = State.ReadFromAddress;
+                if (_addressCarry || _writeInstruction)
+                {
+                    _state = State.FixAddressHigh;
+                }
+                else
+                {
+                    _state = State.ReadFromAddress;
+                }
                 break;
             case State.FetchOperand:
                 _operand = _mmu.ReadByte(_pc++);
@@ -167,6 +181,22 @@ public class CPU
                 _addressHigh = _mmu.ReadByte((byte)(_operand + 1));
                 _addressCarry = ((_addressLow + _y) >> 8) != 0;
                 _addressLow += _y;
+
+                if (_addressCarry || _writeInstruction)
+                {
+                    _state = State.FixAddressHigh;
+                }
+                else
+                {
+                    _state = State.ReadFromAddress;
+                }
+                break;
+            case State.FixAddressHigh:
+                if (_addressCarry)
+                {
+                    _addressCarry = false;
+                    _addressHigh++;
+                }
                 _state = State.ReadFromAddress;
                 break;
             case State.ReadFromAddress:
@@ -182,12 +212,6 @@ public class CPU
                     {
                         _addressLow += _x;
                     }
-                    break;
-                }
-                else if (_addressCarry)
-                {
-                    _addressCarry = false;
-                    _addressHigh++;
                     break;
                 }
 
