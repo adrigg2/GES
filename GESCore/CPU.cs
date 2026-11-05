@@ -18,6 +18,8 @@ public class CPU
         FixAddressHigh,
         ReadFromAddress,
         ExecuteImplied,
+        ExecuteRMW,
+        Write,
     }
 
     [Flags]
@@ -223,19 +225,32 @@ public class CPU
                         ALUInstruction(a);
                         break;
                     case (byte)OpcodeType.RMW:
-                        RMWInstruction(a);
+                        _state = State.ExecuteRMW;
                         break;
                 }
                 break;
             case State.ExecuteImplied:
+                _operand = _a;
                 switch (c)
                 {
                     case (byte)OpcodeType.Control:
                         break;
                     case (byte)OpcodeType.RMW:
                         RMWInstruction(a, impliedAddressing: true);
+                        if (a <= 0x60)
+                        {
+                            _a = _operand;
+                        }
                         break;
                 }
+                break;
+            case State.ExecuteRMW:
+                _mmu.WriteByte((ushort)((_addressHigh << 8) | _addressLow), _operand);
+                RMWInstruction(a);
+                break;
+            case State.Write:
+                _mmu.WriteByte((ushort)((_addressHigh << 8) | _addressLow), _operand);
+                _state = State.FetchOpcode;
                 break;
         }
     }
@@ -339,11 +354,29 @@ public class CPU
                 _state = State.FetchOperand;
                 return;
             case 0x06:
+                if (impliedAddressing)
+                {
+                    _x--;
+                    SetZeroFlag(_x);
+                    SetNegativeFlag(_x);
+                }
+                else
+                {
+                    _operand--;
+                    SetZeroFlag(_operand);
+                    SetNegativeFlag(_operand);
+                }
                 break;
             case 0x07:
+                if (!impliedAddressing)
+                {
+                    _operand++;
+                    SetZeroFlag(_operand);
+                    SetNegativeFlag(_operand);
+                }
                 break;
         }
-        // write state
+        _state = State.Write;
     }
 
     private void ORA()
